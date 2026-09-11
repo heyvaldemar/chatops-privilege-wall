@@ -1,0 +1,243 @@
+# Image pins live HERE, as interpolation defaults, so `git pull` (or
+# re-downloading this file) delivers the exact version combination this
+# repository has tested — no .env editing required. Setting the matching
+# variable in .env overrides the default for anyone who wants to pin
+# differently; .env itself carries only secrets and deliberate overrides.
+# CI (Trivy scans, check-pin-freshness, the ephemeral test .env) reads
+# the pins from these lines — this block is the single source of truth.
+x-images:
+  traefik: &traefik-image ${TRAEFIK_IMAGE_TAG:-traefik:${TRAEFIK_IMAGE_VERSION:-3.7@sha256:f86a2cab1b5c649070c49f883c743dd32d8485a56e3368c5f93b9e91f1e91259}}
+  python: &python-image ${WALL_PYTHON_IMAGE_TAG:-python:${WALL_PYTHON_IMAGE_VERSION:-3.13-alpine@sha256:7415fbc3c9e4979cc717d92377ab2bc7b2b4a2af1ac03cc52b5f3f88efedaf3a}}
+
+networks:
+  # Traefik's own network, shared with whatever else you run behind it.
+  traefik-network:
+    external: true
+
+  # THE EDGE'S NETWORK HAS NO ROUTE OUT, and it is declared here rather than
+  # created by hand on purpose: this is a property of the design, not a flag
+  # somebody has to remember to pass to `docker network create`. Traefik sits on
+  # both networks and carries requests in. The edge cannot make a connection of
+  # its own to anywhere, which matters because the edge is the part strangers
+  # can reach.
+  edge-network:
+    internal: true
+
+  # The worker's network exists so it can reach your chat platform's webhook.
+  # THE EDGE IS NOT ON IT. The two containers share one directory and nothing
+  # else: no network path, no socket, no shared secret.
+  worker-network:
+
+volumes:
+  # The wall itself. The edge may write here and the worker may read here, and
+  # that is the entire channel between them.
+  wall-queue:
+  # One-shot tokens, written by mint.py and spent by the worker.
+  wall-state:
+  traefik-certificates:
+
+services:
+  edge:
+    image: *python-image
+    # Hardening: no privilege escalation via setuid binaries
+    security_opt:
+      - no-new-privileges:true
+    # Drop every Linux capability. It listens on a high port, writes into one
+    # directory, and has no business doing anything a capability would allow.
+    cap_drop:
+      - ALL
+    # The filesystem is read-only apart from the queue and /tmp. There is
+    # nowhere for anything it is tricked into writing to land, and nothing it
+    # writes can outlive the container except the request files it is for.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    # NO DOCKER SOCKET, NO HOST MOUNTS, NO CREDENTIALS. If this list ever grows,
+    # the design is gone: everything on it is reachable from the internet.
+    volumes:
+      - wall-queue:/queue
+      - ./edge/edge.py:/app/edge.py:ro
+    environment:
+      QUEUE_DIR: /queue
+      EDGE_PORT: "8790"
+      EDGE_PATH: ${EDGE_PATH:-/act}
+      RESULT_WAIT: ${RESULT_WAIT:-25}
+      MAX_BODY: ${MAX_BODY:-8192}
+      MAX_QUEUE: ${MAX_QUEUE:-100}
+      FIELD_MAX: ${FIELD_MAX:-128}
+      # The only fields that reach the privileged side. Everything else in a
+      # request stops at this container.
+      FORWARD_FIELDS: ${FORWARD_FIELDS:-token=context.token,user_id=user_id,user_name=user_name}
+    entrypoint: ["python3", "/app/edge.py"]
+    # ONE NETWORK, AND IT IS THE INTERNAL ONE. Adding traefik-network here would
+    # look harmless and would quietly undo the whole arrangement: a container on
+    # a normal bridge network can open a connection to anywhere, and this is the
+    # container strangers can reach.
+    networks:
+      - edge-network
+    deploy:
+      resources:
+        limits:
+          memory: ${EDGE_MEMORY_LIMIT:-128m}
+          cpus: "${EDGE_CPU_LIMIT:-0.5}"
+        reservations:
+          memory: ${EDGE_MEMORY_RESERVATION:-32m}
+          cpus: "${EDGE_CPU_RESERVATION:-0.1}"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8790/health',timeout=5).status==200 else 1)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.wall.rule=Host(`${WALL_HOSTNAME:?set in .env - see .env.example}`)"
+      - "traefik.http.routers.wall.service=wall"
+      - "traefik.http.routers.wall.entrypoints=websecure"
+      - "traefik.http.services.wall.loadbalancer.server.port=8790"
+      - "traefik.http.routers.wall.tls=true"
+      - "traefik.http.routers.wall.tls.certresolver=letsencrypt"
+      - "traefik.http.services.wall.loadbalancer.passhostheader=true"
+      # Traefik reaches the edge on the internal network, which is the only one
+      # the edge is on.
+      - "traefik.docker.network=edge-network"
+    restart: unless-stopped
+    depends_on:
+      traefik:
+        condition: service_healthy
+
+  worker:
+    image: *python-image
+    # Hardening: no privilege escalation via setuid binaries
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    # NO PORTS AND NO INBOUND PATH. This container holds the Docker socket,
+    # which is root on the host: anything that can talk to it can start a
+    # container that mounts /. `:ro` on the mount below changes nothing about
+    # that, because the API is the same API either way. So the one thing this
+    # must never have is a way in, and it does not have one. Nothing is
+    # published, it listens on no port, and it is not on the network the edge
+    # is on.
+    volumes:
+      - wall-queue:/queue
+      - wall-state:/state
+      - ./worker:/app:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      QUEUE_DIR: /queue
+      STATE_FILE: /state/tokens.json
+      HEARTBEAT_FILE: /tmp/HEARTBEAT
+      # How stale the heartbeat may get before the worker is called unhealthy.
+      # It has to exceed ACTION_TIMEOUT: the loop writes the heartbeat between
+      # requests, so a single legitimate slow action holds it for as long as
+      # that action is allowed to run, and a shorter window would report a
+      # perfectly healthy worker as dead every time somebody restarts something
+      # sizeable.
+      HEARTBEAT_MAX_AGE: ${HEARTBEAT_MAX_AGE:-180}
+      TOKEN_TTL: ${TOKEN_TTL:-86400}
+      REPLY_TTL: ${REPLY_TTL:-600}
+      ACTION_TIMEOUT: ${ACTION_TIMEOUT:-120}
+      # WHO MAY ACT. Empty means nobody, and the worker enforces that rather
+      # than skipping the check. Set it before you hand anybody a button.
+      ALLOWED_USER_IDS: ${ALLOWED_USER_IDS:-}
+      # Containers a button may restart. Empty means none.
+      ALLOWED_CONTAINERS: ${ALLOWED_CONTAINERS:-}
+      # Where a refusal or a result is announced, so it is not carried only in
+      # an HTTP reply nobody can read back.
+      NOTIFY_URL: ${NOTIFY_URL:-}
+      # Where the button points. mint.py puts this in the message it prints.
+      ACTION_URL: ${ACTION_URL:-}
+    entrypoint: ["python3", "/app/worker.py"]
+    networks:
+      - worker-network
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_MEMORY_LIMIT:-256m}
+          cpus: "${WORKER_CPU_LIMIT:-1.0}"
+        reservations:
+          memory: ${WORKER_MEMORY_RESERVATION:-32m}
+          cpus: "${WORKER_CPU_RESERVATION:-0.1}"
+    healthcheck:
+      # Reads the heartbeat the queue loop writes. The loop is the only thing
+      # that has to be alive for a button to mean anything, so a check of
+      # anything else would call a deaf worker healthy.
+      test: ["CMD-SHELL", "python3 -c \"import os,sys,time; sys.exit(0 if time.time()-float(open(os.environ['HEARTBEAT_FILE']).read())<float(os.environ['HEARTBEAT_MAX_AGE']) else 1)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  traefik:
+    image: *traefik-image
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    deploy:
+      resources:
+        limits:
+          memory: ${TRAEFIK_MEMORY_LIMIT:-256m}
+          cpus: "${TRAEFIK_CPU_LIMIT:-0.5}"
+        reservations:
+          memory: ${TRAEFIK_MEMORY_RESERVATION:-64m}
+          cpus: "${TRAEFIK_CPU_RESERVATION:-0.1}"
+    command:
+      - "--log.level=${TRAEFIK_LOG_LEVEL:-WARN}"
+      - "--api.dashboard=true"
+      - "--ping=true"
+      - "--ping.entrypoint=ping"
+      - "--entrypoints.ping.address=:8082"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      # A click waits for the worker to finish. The default read timeout is 60s
+      # and RESULT_WAIT is 25s, so the default is already generous; this makes
+      # the relationship explicit rather than coincidental.
+      - "--entrypoints.websecure.transport.respondingTimeouts.readTimeout=${WALL_REQUEST_TIMEOUT:-60s}"
+      - "--providers.docker=true"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      - "--providers.docker.exposedbydefault=false"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL:?set in .env - see .env.example}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/etc/traefik/acme/acme.json"
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.buckets=0.1,0.3,1.2,5.0"
+      - "--global.checknewversion=true"
+      - "--global.sendanonymoususage=false"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-certificates:/etc/traefik/acme
+    networks:
+      - traefik-network
+      - edge-network
+    ports:
+      - "80:80"
+      - "443:443"
+    healthcheck:
+      test: ["CMD", "wget", "http://localhost:8082/ping", "--spider"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`${TRAEFIK_HOSTNAME:?set in .env - see .env.example}`)"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls=true"
+      - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.middlewares=authtraefik"
+      - "traefik.http.middlewares.authtraefik.basicauth.users=${TRAEFIK_BASIC_AUTH:?set in .env - see .env.example for htpasswd generation}"
+      - "traefik.http.services.dashboard.loadbalancer.server.port=8080"
+      - "traefik.http.services.dashboard.loadbalancer.passhostheader=true"
+    restart: unless-stopped

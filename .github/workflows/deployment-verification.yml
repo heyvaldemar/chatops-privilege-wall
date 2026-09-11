@@ -1,0 +1,244 @@
+name: Deployment Verification
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    # Daily rebuild: security patches should not wait for a weekly slot.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: deployment-verification-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  # Authenticated requests avoid the anonymous API rate limit that shared
+  # GitHub runners regularly hit (api.github.com answers 403 otherwise).
+  GH_API_TOKEN: ${{ github.token }}
+  DOCKER_COMPOSE_FILE: chatops-privilege-wall-docker-compose.yml
+  COMPOSE_PROJECT_NAME: chatops-wall
+  WALL_HOST: wall.heyvaldemardm.net
+  TRAEFIK_HOST: traefik.wall.heyvaldemardm.net
+
+jobs:
+  lint:
+    name: Lint shell scripts and workflow YAML
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: ShellCheck
+        run: |
+          docker run --rm -v "$PWD:/mnt" -w /mnt \
+            koalaman/shellcheck-alpine:stable \
+            shellcheck ./tests/*.sh
+
+      - name: Compile every Python file this template ships
+        # These run as the entrypoints of two containers. A syntax error would
+        # otherwise surface as a container that will not start, at deploy time.
+        run: |
+          docker run --rm -v "$PWD:/mnt" -w /mnt \
+            python:3.13-alpine \
+            python3 -m compileall -q edge worker
+
+      - name: actionlint (GitHub Actions workflow linting)
+        run: |
+          docker run --rm -v "$PWD:/mnt" -w /mnt \
+            rhysd/actionlint:1.7.12 \
+            -color
+
+  scan-trivy:
+    name: Scan pinned upstream image with Trivy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      # Image refs are read from the compose file's x-images defaults at
+      # runtime — single source of truth.
+      fail-fast: false
+      matrix:
+        include:
+          - name: python
+            env_var: WALL_PYTHON_IMAGE_TAG
+          - name: traefik
+            env_var: TRAEFIK_IMAGE_TAG
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read pinned ${{ matrix.name }} image from the compose file
+        id: pin
+        env:
+          ENV_VAR: ${{ matrix.env_var }}
+        run: |
+          image="$(grep -m1 -oE "\\$\\{${ENV_VAR}:-.*" "$DOCKER_COMPOSE_FILE" | sed -E -e ':a' -e 's/\$\{[A-Z0-9_]+:-([^{}]*)\}/\1/' -e 'ta')"
+          if [ -z "$image" ]; then
+            echo "${ENV_VAR} default not found in the compose x-images block" >&2
+            exit 1
+          fi
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Trivy scan of ${{ matrix.name }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.pin.outputs.image }}
+          format: sarif
+          output: trivy-${{ matrix.name }}.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF (${{ matrix.name }}) to GitHub Security
+        uses: github/codeql-action/upload-sarif@4e94bd11f71e507f7f87df81788dff88d1dacbfb # v4.31.2
+        with:
+          sarif_file: trivy-${{ matrix.name }}.sarif
+          category: trivy-${{ matrix.name }}
+
+  check-pin-freshness:
+    name: Check pinned images for upstream drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Scheduled + manual dispatch only: a new upstream release is not
+    # actionable inside an unrelated PR. Dependabot cannot see these pins
+    # (they are compose interpolation defaults, not Dockerfile literals), so
+    # this job is the actual tracking mechanism.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compare pinned digests against what each tag resolves to now
+        run: |
+          status=0
+          for var in WALL_PYTHON_IMAGE_TAG TRAEFIK_IMAGE_TAG; do
+            pin="$(grep -m1 -oE "\\$\\{${var}:-.*" "$DOCKER_COMPOSE_FILE" | sed -E -e ':a' -e 's/\$\{[A-Z0-9_]+:-([^{}]*)\}/\1/' -e 'ta')"
+            ref="${pin%%@*}"
+            pinned_digest="${pin##*@}"
+            # Three attempts: an unanswered registry lookup used to leave this
+            # empty, and the comparison below then reported it as drift.
+            current_digest=""
+            for attempt in 1 2 3; do
+              current_digest="$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' 2>/dev/null | jq -r '.digest // empty')"
+              [ -n "$current_digest" ] && break
+              sleep $(( attempt * 5 ))
+            done
+            if [ -z "$current_digest" ]; then
+              echo "::error::${ref} did not resolve after three attempts: the registry did not answer, or the tag is gone. The pin itself is unchanged."
+              status=1
+              continue
+            fi
+            if [ "$pinned_digest" != "$current_digest" ]; then
+              echo "::error::${var} digest drift: pinned ${pinned_digest}, but ${ref} now resolves to ${current_digest}"
+              status=1
+            else
+              echo "${var} OK (${ref})"
+            fi
+          done
+          exit "$status"
+
+  deploy-and-test:
+    name: docker compose up + the wall holds
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Create the Traefik network
+        run: docker network create traefik-network || true
+
+      - name: Generate test .env with ephemeral credentials
+        # The real .env is gitignored. CI generates throwaway values so
+        # `docker compose up` succeeds without committing anything. No
+        # *_IMAGE_TAG values on purpose: the compose file's x-images defaults
+        # apply, so CI tests exactly the pins the template ships.
+        #
+        # MAX_QUEUE is 3 so the queue can actually be filled in a test, and
+        # HEARTBEAT_MAX_AGE is seconds rather than minutes so the heartbeat
+        # test finishes. Both are the shipped mechanism with a smaller number;
+        # the defaults live in the compose file and .env.example.
+        run: |
+          cat > .env <<EOF
+          TRAEFIK_ACME_EMAIL=ci@example.com
+          TRAEFIK_HOSTNAME=${TRAEFIK_HOST}
+          TRAEFIK_BASIC_AUTH=traefikadmin:\$\$2y\$\$10\$\$sMzJfirKC75x/hVpiINeZOiSm.Jkity9cn4KwNkRvO7hSQVFc5FLO
+          WALL_HOSTNAME=${WALL_HOST}
+          ALLOWED_USER_IDS=operator-1,operator-2
+          ALLOWED_CONTAINERS=wall-test-target
+          ACTION_URL=https://${WALL_HOST}/act
+          MAX_QUEUE=3
+          ACTION_TIMEOUT=20
+          HEARTBEAT_MAX_AGE=25
+          EOF
+          echo "Generated ephemeral .env for CI run"
+
+      - name: A container for a button to restart
+        run: |
+          docker rm -f wall-test-target 2>/dev/null || true
+          docker run -d --name wall-test-target alpine:3.22 \
+            sh -c 'while true; do sleep 30; done'
+
+      - name: Start up services using Docker Compose
+        run: docker compose -f "$DOCKER_COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" up -d
+
+      - name: Modify /etc/hosts for internal routing
+        run: |
+          echo "127.0.0.1 ${WALL_HOST}" | sudo tee -a /etc/hosts
+          echo "127.0.0.1 ${TRAEFIK_HOST}" | sudo tee -a /etc/hosts
+
+      - name: Print Docker Compose services status
+        run: docker compose -f "$DOCKER_COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" ps
+
+      - name: The endpoint answers through Traefik
+        # Through the proxy, not on the container: a health endpoint that only
+        # answers inside its own namespace proves nothing about the path a chat
+        # platform takes.
+        run: |
+          # shellcheck disable=SC2016
+          timeout 5m bash -c 'while ! curl -sk "https://$WALL_HOST/health" | grep -q "\"ok\""; do
+            echo "Waiting for the edge through Traefik..."
+            sleep 5
+          done'
+          curl -sk "https://$WALL_HOST/health" -w "\n"
+
+      - name: Run the privilege-wall end-to-end tests
+        run: |
+          chmod +x tests/e2e-privilege-wall.sh
+          ./tests/e2e-privilege-wall.sh
+
+      - name: Wait for the Traefik dashboard to be ready
+        run: |
+          # shellcheck disable=SC2016
+          timeout 5m bash -c 'while ! curl -fsSLk --write-out "%{http_code}" --output /dev/null "https://$TRAEFIK_HOST" | grep -E "200|401"; do
+            echo "Waiting for the dashboard to be ready..."
+            sleep 10
+          done'
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker compose -f "$DOCKER_COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" logs
+
+      - name: Shutdown Docker Compose services
+        if: always()
+        run: |
+          docker compose -f "$DOCKER_COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" down
+          docker rm -f wall-test-target 2>/dev/null || true

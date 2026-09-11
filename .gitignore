@@ -1,0 +1,9 @@
+# Local environment with real values - never commit
+.env
+
+# Python bytecode from the scripts in this repository
+__pycache__/
+*.pyc
+
+# Local-only compose variants used while testing on a busy machine
+local.yml
