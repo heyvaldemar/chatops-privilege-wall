@@ -143,6 +143,12 @@ decides what a button will do; the click only chooses whether to do it.
 - [ ] **Leave the socket where it is.** If anything is ever added to the edge's
       volume list, the arrangement is gone.
 
+## Updating
+
+`./update.sh` moves this checkout to the latest release tag, a combination this repository's CI has booted, upgraded from the previous release on the same volumes, and tested. It refuses to cross a major version unattended, refuses to run over local changes, and names any variable that became required since your version before anything has moved. `./update.sh --dry-run` says what would happen.
+
+It waits for the worker to report healthy before calling the update finished, because the worker is judged by its queue loop: one that comes back unable to read its queue leaves every button silently doing nothing, and `up -d` returns 0 over that.
+
 ## Testing
 
 `tests/e2e-privilege-wall.sh` asserts sixteen things against a running stack.

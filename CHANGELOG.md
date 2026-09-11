@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(no unreleased changes yet)_
 
+## [1.1.0] - 2026-09-11
+
+### Added
+
+- **`update.sh`, and a CI run that upgrades rather than starts fresh.** A
+  deployed host had no way to move between release tags, and CI proved only
+  that the current release boots on empty volumes. Neither says anything about
+  what a deployed host actually does, which is `git pull && docker compose
+  up -d` over a token store and a queue the previous release wrote.
+
+  The script refuses to cross a major version unattended, refuses to run over
+  local changes, and names any variable that became required since your version
+  before anything has moved. It waits for the worker to report healthy before
+  calling the update finished: the worker is judged by its queue loop, and one
+  that comes back unable to read its queue leaves every button silently doing
+  nothing while `up -d` returns 0 over it.
+
+  CI now starts the previous release on this project's volumes first, waits for
+  it to be healthy, and stops it keeping the volumes, so the ordinary `up -d`
+  that follows is an upgrade and every check after it judges an upgraded stack.
+
 ## [1.0.0] - 2026-09-11
 
 ### Added
@@ -77,5 +98,7 @@ _(no unreleased changes yet)_
   by CI. The design's claims are negative ones and a negative claim nobody tests
   is a comment.
 
-[Unreleased]: https://github.com/heyvaldemar/chatops-privilege-wall/compare/v1.0.0...HEAD
+
+[Unreleased]: https://github.com/heyvaldemar/chatops-privilege-wall/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/heyvaldemar/chatops-privilege-wall/releases/tag/v1.1.0
 [1.0.0]: https://github.com/heyvaldemar/chatops-privilege-wall/releases/tag/v1.0.0
