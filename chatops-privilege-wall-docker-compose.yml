@@ -150,6 +150,12 @@ services:
       # Where a refusal or a result is announced, so it is not carried only in
       # an HTTP reply nobody can read back.
       NOTIFY_URL: ${NOTIFY_URL:-}
+      # Refusals from an id starting with this are logged and never announced.
+      # canary.sh probes this endpoint by being refused twice, and those
+      # refusals are the check passing: announcing them puts two messages a day
+      # into the channel saying nothing happened, which is how a channel stops
+      # being read. Set it empty to turn the exemption off.
+      CANARY_ID_PREFIX: ${CANARY_ID_PREFIX:-canary}
       # Where the button points. mint.py puts this in the message it prints.
       ACTION_URL: ${ACTION_URL:-}
     entrypoint: ["python3", "/app/worker.py"]

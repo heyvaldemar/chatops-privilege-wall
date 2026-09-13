@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(no unreleased changes yet)_
 
+## [1.2.0] - 2026-09-12
+
+### Added
+
+- **`canary.sh`, and a worker that knows a probe from an incident.** A
+  privileged endpoint nobody checks is one you find out about on the day it
+  matters, and this one cannot be checked by doing anything: every action it can
+  perform is an action nobody asked for. So it is checked by being refused,
+  twice, at the two gates that must never stop working. One probe uses an id
+  that is not on the operator list. The other uses an id that is, with a token
+  nobody issued, which means it has to pass the operator list to reach the gate
+  it tests.
+
+  Both refusals are the check passing. The worker logs them and does not
+  announce them, because two messages a day saying nothing happened is how a
+  channel stops being read, and a channel nobody reads is where the refusal that
+  mattered goes to die. The skip prints its own line, so the path taken is
+  visible rather than assumed.
+
+  `CANARY_ID_PREFIX` decides what counts as a probe. It is a prefix rather than
+  an id so the probe identities stay in `canary.sh` instead of being copied into
+  configuration to drift apart from it.
+
+  **And the id has to be unmistakable.** In the system this pattern comes from,
+  the canary's entry looked exactly like a colleague's and sat under a comment
+  naming three people. During a tidy-up the list was read as stale and the entry
+  was deleted with the genuinely dead ones. The health check broke that night,
+  and the first anybody saw of it was two refusal cards at one minute past
+  midnight. The canary now says precisely that when its own id is missing,
+  rather than failing vaguely: *"is not in ALLOWED_USER_IDS, so this probe
+  stopped at the operator list and never reached token validation."*
+
+  A junk argument to `canary.sh` is rejected with exit 2 rather than ignored.
+  Ignoring it would run a probe nobody asked for and then report success for it.
+
+- Two scenarios, which are one test in halves: the canary's refusal is not
+  announced, and an ordinary refusal still is. Proving only that the canary is
+  quiet cannot tell a working exemption from a notifier that has stopped working
+  altogether. Eighteen scenarios now.
+
 ## [1.1.0] - 2026-09-11
 
 ### Added
@@ -99,6 +139,7 @@ _(no unreleased changes yet)_
   is a comment.
 
 
-[Unreleased]: https://github.com/heyvaldemar/chatops-privilege-wall/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/heyvaldemar/chatops-privilege-wall/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/heyvaldemar/chatops-privilege-wall/releases/tag/v1.2.0
 [1.1.0]: https://github.com/heyvaldemar/chatops-privilege-wall/releases/tag/v1.1.0
 [1.0.0]: https://github.com/heyvaldemar/chatops-privilege-wall/releases/tag/v1.0.0

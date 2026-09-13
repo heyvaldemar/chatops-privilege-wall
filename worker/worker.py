@@ -36,6 +36,11 @@ REPLY_TTL = int(os.environ.get("REPLY_TTL", "600"))
 ALLOWED = {v.strip() for v in os.environ.get("ALLOWED_USER_IDS", "").split(",")
            if v.strip()}
 
+# The identity prefix a health check probes with. See is_canary() for why this
+# is a prefix and not an id, and why the id it matches has to be one nobody
+# could mistake for a colleague.
+CANARY_PREFIX = os.environ.get("CANARY_ID_PREFIX", "canary")
+
 
 def now():
     return time.time()
@@ -94,6 +99,35 @@ def notify(title, text, color="#d9534f"):
         print("notify failed: %s" % exc, flush=True)
 
 
+def is_canary(uid):
+    """Is this a health check proving the endpoint still refuses correctly?
+
+    A privileged endpoint nobody probes is one you find out about on the day it
+    matters, and the only way to probe this one is to be refused by it: once by
+    the operator list, once by token validation. Both refusals are the check
+    passing. Announcing them puts two messages a day into the channel saying
+    nothing happened, which is how a channel stops being read, and a channel
+    nobody reads is where the refusal that mattered goes to die.
+
+    The log line stays either way. Only the announcement is skipped, and the
+    skip prints its own line so the path taken is visible rather than inferred.
+
+    A PREFIX, NOT AN ID, so the probe identity lives in the canary script and is
+    never copied into configuration to drift apart from it. A real user id could
+    in principle begin with these letters; if one ever did, the only consequence
+    is that person's refusals stay in the log instead of reaching the channel.
+
+    AND THE ID IT MATCHES MUST BE UNMISTAKABLE. In the system this pattern comes
+    from the canary's entry looked exactly like a person's id, sitting under a
+    comment that named three colleagues. The list was read as stale, the entry
+    was tidied away with the dead ones, and the health check it belonged to
+    broke: the second probe stopped at the operator list instead of reaching
+    token validation. Write it as canary0000000000000000, not as something that
+    reads like somebody's account.
+    """
+    return bool(CANARY_PREFIX) and uid.startswith(CANARY_PREFIX)
+
+
 def decide(req):
     """Judge one request and carry it out. Returns the reply body."""
     token = req.get("token", "")
@@ -122,10 +156,13 @@ def decide(req):
         # ANNOUNCED, not silent. Silence is what lets a stale allowlist survive:
         # everyone clicks, everyone is refused, nobody sees anything, and the
         # list stays broken for as long as the buttons have existed.
-        notify(":lock: A click was refused",
-               "%s is not on the operator list, so nothing was done. Their id is "
-               "`%s`. Add it to ALLOWED_USER_IDS if they should be on it."
-               % (who, uid or "not supplied"), "#f0ad4e")
+        if is_canary(uid):
+            print("  (canary probe: operator-list refusal not announced)", flush=True)
+        else:
+            notify(":lock: A click was refused",
+                   "%s is not on the operator list, so nothing was done. Their id "
+                   "is `%s`. Add it to ALLOWED_USER_IDS if they should be on it."
+                   % (who, uid or "not supplied"), "#f0ad4e")
         return {"ephemeral_text":
                 "You are not allowed to do this. Your id is `%s` and it is not "
                 "on the operator list." % (uid or "not supplied")}
@@ -133,10 +170,13 @@ def decide(req):
     pending, burned = spend(token)
     if not pending:
         print("stale click by %s on a token that is gone" % who, flush=True)
-        notify(":clock3: That request was already handled, or it expired",
-               "%s pressed a button on a request that is no longer open. Nothing "
-               "was done. Buttons stay live for %dh."
-               % (who, TOKEN_TTL // 3600), "#888888")
+        if is_canary(uid):
+            print("  (canary probe: token refusal not announced)", flush=True)
+        else:
+            notify(":clock3: That request was already handled, or it expired",
+                   "%s pressed a button on a request that is no longer open. "
+                   "Nothing was done. Buttons stay live for %dh."
+                   % (who, TOKEN_TTL // 3600), "#888888")
         return {"ephemeral_text": "This was already handled, or it has expired."}
 
     ok, result = actions.run(pending.get("action", ""), pending.get("args", {}))

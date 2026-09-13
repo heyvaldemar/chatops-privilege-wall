@@ -116,6 +116,20 @@ and says plainly that nothing happened.
 and calling it the result turns every refusal into a success. The tool says "I
 will not do that while a job is running" and the operator gets a tick.
 
+## Checking that it still refuses
+
+A privileged endpoint nobody probes is one you find out about on the day it matters, and this one cannot be probed by doing anything: every action it can perform is an action you did not ask for. So it is probed by being turned away, at the two gates that must never stop working.
+
+```bash
+ACTION_URL=https://your-host/act ./canary.sh
+```
+
+The first probe uses an id that is not on the operator list and must be refused by the list. The second uses an id that **is** on the list with a token nobody issued, and must be refused by token validation. The second one has to pass the operator list to reach the gate it tests, so `CANARY_OPERATOR_ID` belongs in `ALLOWED_USER_IDS` next to the people. When it is missing, the canary says exactly that rather than reporting a vague failure.
+
+Both refusals are the check passing, so the worker logs them and does not announce them. Two messages a day saying nothing happened is how a channel stops being read, and a channel nobody reads is where the refusal that mattered goes to die. The skip prints its own log line, so the path taken is visible rather than assumed.
+
+**Write the canary's id so that nobody could mistake it for a person.** This is not style. In the system this pattern comes from, the canary's entry looked exactly like a colleague's id and sat under a comment naming three people. During a tidy-up the whole list was read as stale and the entry was deleted with the dead ones. The health check broke that night, and the first thing anybody saw was two refusal cards at one minute past midnight. `canary1111111111111111` could not have been deleted by that mistake.
+
 ## Extending it
 
 Add an entry to `TABLE` in `worker/actions.py`. Each action takes a dict of
@@ -140,6 +154,10 @@ decides what a button will do; the click only chooses whether to do it.
       `worker/actions.py` or alongside the token check. The edge deliberately
       does not: verification needs a shared secret, and the whole design is that
       the exposed half holds none.
+- [ ] **Put the canary's operator id in `ALLOWED_USER_IDS`,** and write it so
+      it cannot be mistaken for a person's.
+- [ ] **Run `canary.sh` from a timer.** A gate nobody tests is a gate you find
+      out about on the day it stops working.
 - [ ] **Leave the socket where it is.** If anything is ever added to the edge's
       volume list, the arrangement is gone.
 
@@ -151,13 +169,15 @@ It waits for the worker to report healthy before calling the update finished, be
 
 ## Testing
 
-`tests/e2e-privilege-wall.sh` asserts sixteen things against a running stack.
+`tests/e2e-privilege-wall.sh` asserts eighteen things against a running stack.
 The design's claims are all negative ones, and a negative claim nobody tests is
 a comment: that the edge holds no Docker socket, that it cannot reach the
 internet, that it cannot reach the worker, that its filesystem is read-only
 apart from the queue, that an undeclared field does not cross, that an oversized
 body and a non-object body are refused, that a full queue answers 503 instead of
 writing anyway, and that a half-written request is never read.
+
+Two of them are one test in halves, and neither half is worth anything alone: the canary's refusal is not announced, and an ordinary refusal still is. Proving only that the canary is quiet cannot tell a working exemption from a notifier that has stopped working altogether.
 
 The rest are the five evenings above, plus the two that matter most in
 operation: a click really does restart the container, and a worker whose queue

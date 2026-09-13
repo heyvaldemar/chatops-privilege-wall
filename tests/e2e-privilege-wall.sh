@@ -280,6 +280,40 @@ test_the_worker_is_judged_by_its_queue_loop() {
   echo "  and healthy again once the loop resumed"
 }
 
+# The two below are one test in two halves, and neither half is worth anything
+# alone. Proving the canary is quiet proves nothing if the notifier is broken:
+# a check that only ever demonstrates silence cannot tell a working exemption
+# from a notifier that stopped working altogether. So one asserts the canary
+# does not reach the channel and the other asserts an ordinary refusal does.
+test_a_canary_refusal_is_logged_and_not_announced() {
+  local out
+  out="$(dc run --rm --no-deps -e PYTHONPATH=/app \
+        -e ALLOWED_USER_IDS=someone-else -e NOTIFY_URL= --entrypoint python3 worker -c '
+import json, worker
+print(json.dumps(worker.decide({"token": "x", "user_id": "canary0000000000000000"})))' 2>&1 | tr -d '\r')"
+  grep -q "canary probe: operator-list refusal not announced" <<<"$out" \
+    || { echo "  the canary was not recognised: $out" >&2; return 1; }
+  grep -q "not allowed" <<<"$out" \
+    || { echo "  the canary was not refused, which is the point of the probe" >&2; return 1; }
+  echo "  refused, logged as a probe, and not sent to the channel"
+}
+
+test_an_ordinary_refusal_is_still_announced() {
+  local out
+  out="$(dc run --rm --no-deps -e PYTHONPATH=/app \
+        -e ALLOWED_USER_IDS=someone-else -e NOTIFY_URL=http://127.0.0.1:9/hook \
+        --entrypoint python3 worker -c '
+import json, worker
+print(json.dumps(worker.decide({"token": "x", "user_id": "a-real-person"})))' 2>&1 | tr -d '\r')"
+  grep -q "canary probe" <<<"$out" \
+    && { echo "  an ordinary id was treated as a canary" >&2; return 1; }
+  # Port 9 discards, so the attempt fails and says so. That failure is the
+  # proof: the notifier was reached for this id and skipped for the canary.
+  grep -q "notify failed" <<<"$out" \
+    || { echo "  no announcement was attempted for an ordinary refusal: $out" >&2; return 1; }
+  echo "  announced (the attempt reached the notifier and was reported)"
+}
+
 run_test test_the_edge_holds_no_docker_socket
 run_test test_the_edge_has_no_route_out
 run_test test_the_edge_cannot_reach_the_worker
@@ -296,6 +330,8 @@ run_test test_a_token_is_spent_exactly_once
 run_test test_a_refused_action_gives_the_button_back
 run_test test_a_click_really_restarts_the_container
 run_test test_the_worker_is_judged_by_its_queue_loop
+run_test test_a_canary_refusal_is_logged_and_not_announced
+run_test test_an_ordinary_refusal_is_still_announced
 
 echo
 echo "=== $PASSED passed, $FAILED failed ==="
