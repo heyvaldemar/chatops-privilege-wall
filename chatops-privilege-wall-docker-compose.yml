@@ -7,7 +7,7 @@
 # the pins from these lines — this block is the single source of truth.
 x-images:
   traefik: &traefik-image ${TRAEFIK_IMAGE_TAG:-traefik:${TRAEFIK_IMAGE_VERSION:-3.7@sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0}}
-  python: &python-image ${WALL_PYTHON_IMAGE_TAG:-python:${WALL_PYTHON_IMAGE_VERSION:-3.13-alpine@sha256:1a63a53928ce53d2b0baf08092a703f4840ac5dfbd61fd48802dbf48e08c801e}}
+  python: &python-image ${WALL_PYTHON_IMAGE_TAG:-python:${WALL_PYTHON_IMAGE_VERSION:-3.13-alpine@sha256:79e7a9b9ff1cbceff819f856fb374477792a5967759d94df266de7b7b4120e6f}}
 
 networks:
   # Traefik's own network, shared with whatever else you run behind it.
