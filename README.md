@@ -1,5 +1,7 @@
 # A chat button that restarts a service, without giving the internet root
 
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14896/badge)](https://www.bestpractices.dev/projects/14896)
+
 The usual way to build this is one container. It listens for the click and it
 holds a Docker socket, so the most exposed component you run is also the most
 privileged one, and the only thing between those two facts is a small JSON
