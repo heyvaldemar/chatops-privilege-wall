@@ -209,7 +209,7 @@ services:
       # A click waits for the worker to finish. The default read timeout is 60s
       # and RESULT_WAIT is 25s, so the default is already generous; this makes
       # the relationship explicit rather than coincidental.
-      - "--entrypoints.websecure.transport.respondingTimeouts.readTimeout=${WALL_REQUEST_TIMEOUT:-60s}"
+      - "--entrypoints.websecure.transport.respondingTimeouts.readTimeout=${TRAEFIK_READ_TIMEOUT:-${WALL_REQUEST_TIMEOUT:-60s}}"
       # The other two timeouts on the same entry point, Traefik's own defaults
       # unless set in .env (see .env.example).
       - "--entrypoints.websecure.transport.respondingTimeouts.writeTimeout=${TRAEFIK_WRITE_TIMEOUT:-0s}"

@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_(no unreleased changes yet)_
+### Changed
+
+- **The read timeout also answers to `TRAEFIK_READ_TIMEOUT`**, the name every
+  Traefik stack in the fleet takes. When set it wins; `WALL_REQUEST_TIMEOUT`
+  keeps working, and with neither set the default is still 60s.
 
 ## [1.3.0] - 2026-09-26
 
