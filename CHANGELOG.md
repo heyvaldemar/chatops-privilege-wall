@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The write and idle timeouts on Traefik's HTTPS entry point can be set from `.env`.**
+  `TRAEFIK_WRITE_TIMEOUT` and `TRAEFIK_IDLE_TIMEOUT` join `WALL_REQUEST_TIMEOUT`,
+  which already set the read timeout, and default to Traefik's own values (0s,
+  180s), so nothing changes unless you set them. The same variables now exist in
+  every Traefik stack in the fleet, after a user of the
+  [Keycloak template](https://github.com/heyvaldemar/keycloak-traefik-letsencrypt-docker-compose)
+  asked for a way to tune them without replacing the whole command.
+
 ### Changed
 
 - **The freshness check has its own workflow, Pin Freshness.** It ran inside Deployment Verification, whose badge is the one at the top of this README. Across the fleet, nine red runs in ten were a pin one version behind - which the fleet's triage moves within the day - and a reader cannot tell that from a stack that does not boot. The badge now says whether the stack boots. The job itself is unchanged.
