@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_(no unreleased changes yet)_
+
+## [1.3.11] - 2026-10-30
+
 ### Security
 
 - **`python:3.13-alpine` was rebuilt upstream**; the pin moved from `sha256:8bcfa47b04b8…` to `sha256:7984cf56cead…`. Same version, same tag, a rebuilt base image — the usual shape of a security fix in a base layer.
@@ -250,7 +254,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is a comment.
 
 
-[Unreleased]: https://github.com/heyvaldemar/chatops-privilege-wall/compare/v1.3.10...HEAD
+[Unreleased]: https://github.com/heyvaldemar/chatops-privilege-wall/compare/v1.3.11...HEAD
+[1.3.11]: https://github.com/heyvaldemar/chatops-privilege-wall/compare/v1.3.10...v1.3.11
 [1.3.10]: https://github.com/heyvaldemar/chatops-privilege-wall/compare/v1.3.9...v1.3.10
 [1.3.9]: https://github.com/heyvaldemar/chatops-privilege-wall/compare/v1.3.8...v1.3.9
 [1.3.8]: https://github.com/heyvaldemar/chatops-privilege-wall/compare/v1.3.7...v1.3.8
