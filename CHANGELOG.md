@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_(no unreleased changes yet)_
+
+## [1.3.12] - 2026-10-31
+
 ### Security
 
 - **`traefik:3.7` was rebuilt upstream**; the pin moved from `sha256:1336e85aaed2…` to `sha256:e9338a01a433…`. Same version, same tag, a rebuilt base image — the usual shape of a security fix in a base layer.
@@ -256,7 +260,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is a comment.
 
 
-[Unreleased]: https://github.com/heyvaldemar/chatops-privilege-wall/compare/v1.3.11...HEAD
+[Unreleased]: https://github.com/heyvaldemar/chatops-privilege-wall/compare/v1.3.12...HEAD
+[1.3.12]: https://github.com/heyvaldemar/chatops-privilege-wall/compare/v1.3.11...v1.3.12
 [1.3.11]: https://github.com/heyvaldemar/chatops-privilege-wall/compare/v1.3.10...v1.3.11
 [1.3.10]: https://github.com/heyvaldemar/chatops-privilege-wall/compare/v1.3.9...v1.3.10
 [1.3.9]: https://github.com/heyvaldemar/chatops-privilege-wall/compare/v1.3.8...v1.3.9
