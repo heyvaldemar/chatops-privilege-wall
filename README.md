@@ -215,15 +215,16 @@ Every release from v1.2.3 on carries three files made on GitHub's runner with a 
 ```bash
 cosign verify-blob chatops-privilege-wall-<tag>.tar.gz \
   --bundle chatops-privilege-wall-<tag>.tar.gz.sigstore.json \
-  --certificate-identity-regexp '^https://github.com/heyvaldemar/chatops-privilege-wall/' \
+  --certificate-identity https://github.com/heyvaldemar/chatops-privilege-wall/.github/workflows/release-assets.yml@refs/tags/<tag> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 slsa-verifier verify-artifact chatops-privilege-wall-<tag>.tar.gz \
   --provenance-path chatops-privilege-wall-<tag>.intoto.jsonl \
-  --source-uri github.com/heyvaldemar/chatops-privilege-wall
+  --source-uri github.com/heyvaldemar/chatops-privilege-wall \
+  --source-tag <tag>
 ```
 
-Add `--source-tag <tag>` for a release published after 24 September 2026, which is signed by the run that published it. The five releases before that date were signed by a run started by hand on `main`, so their provenance names the branch, not the tag; the archive is still the tag's tree, and the signature still belongs to this repository's workflow. The workflow that makes them is [`release-assets.yml`](.github/workflows/release-assets.yml).
+The identity is exact: this repository's `release-assets.yml`, on the tag you deploy. A signature from any other workflow, or from this one on another ref, fails the check. A release published after 24 September 2026 is signed by the run that published it, so the commands above take it as they are. The five releases before that date were signed by a run started by hand on `main`: for those, end the identity in `@refs/heads/main` and give slsa-verifier `--source-branch main` instead of `--source-tag <tag>`. The archive is still the tag's tree. The workflow that makes them is [`release-assets.yml`](.github/workflows/release-assets.yml).
 
 ---
 
